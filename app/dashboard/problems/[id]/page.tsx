@@ -12,6 +12,7 @@ import Skeleton from "react-loading-skeleton";
 import "react-loading-skeleton/dist/skeleton.css";
 import Draggable from "react-draggable";
 import { useRouter } from "next/navigation";
+import axios from "axios";
 
 interface TestCase {
   input: string;
@@ -25,6 +26,14 @@ interface Problem {
   testCases: TestCase[];
 }
 
+interface TestResult {
+  status: string;
+  input: string;
+  expectedOutput: string;
+  actualOutput: string;
+  index: number;
+}
+
 export default function ProblemEvaluationPage({
   params,
 }: {
@@ -32,16 +41,15 @@ export default function ProblemEvaluationPage({
 }) {
   const [problem, setProblem] = useState<Problem | null>(null);
   const [code, setCode] = useState<string>("");
-  const [result, setResult] = useState<string | null>(null);
+  const [result, setResult] = useState<TestResult[]>([]);
   const [isHintEnabled, setIsHintEnabled] = useState<boolean>(false);
   const [editorHeight, setEditorHeight] = useState<number>(400); // Default height for small screens
   const [hints, setHints] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [isLgScreen, setIsLgScreen] = useState<boolean>(false);
-   const router = useRouter();
+  const router = useRouter();
 
   useEffect(() => {
-   
     const fetchProblem = async () => {
       try {
         const response = await fetch(
@@ -51,7 +59,7 @@ export default function ProblemEvaluationPage({
             headers: {
               "Content-Type": "application/json",
             },
-            credentials: "include", 
+            credentials: "include",
           }
         );
         if (!response.ok) {
@@ -85,7 +93,7 @@ export default function ProblemEvaluationPage({
   const runTests = () => {
     if (!problem) return;
 
-    const testResults = problem.testCases.map((tc) => {
+    const testResults = problem.testCases.map((tc, index) => {
       try {
         const parsedInput = JSON.parse(tc.input);
         let functionName = null;
@@ -110,16 +118,26 @@ export default function ProblemEvaluationPage({
           JSON.parse(tc.expectedOutput)
         );
 
-        return normalizedUserOutput === normalizedExpectedOutput
-          ? "Passed"
-          : "Failed";
+        return {
+          status: normalizedUserOutput === normalizedExpectedOutput ? "Passed" : "Failed",
+          input: tc.input,
+          expectedOutput: tc.expectedOutput,
+          actualOutput: normalizedUserOutput,
+          index: index,
+        };
       } catch (err) {
         console.error(err);
-        return "Error";
+        return {
+          status: "Error",
+          input: tc.input,
+          expectedOutput: tc.expectedOutput,
+          actualOutput: "Error",
+          index: index,
+        };
       }
     });
 
-    setResult(testResults.join(", "));
+    setResult(testResults);
   };
 
   const handleToggleHints = () => {
@@ -129,16 +147,24 @@ export default function ProblemEvaluationPage({
   const fetchAIHint = async (message: string) => {
     if (isHintEnabled && problem) {
       try {
+        const failedIndexes = result
+          .map((r, index) => (r.status !== "Passed" ? index : null))
+          .filter((index) => index !== null);
+
         const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/ask`, {
           method: 'POST',
           headers: {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            question: problem.description,
+            id: problem.id,
             dict_of_vars: { code },
             prompt: message,
+              testResults: {
+                failedIndexes: failedIndexes.length > 0 ? failedIndexes : null,
+              },
           }),
+          credentials: "include",
         });
 
         if (!response.ok) {
@@ -177,32 +203,35 @@ export default function ProblemEvaluationPage({
             <Button onClick={runTests} className="mt-2 bg-black w-36 text-white">
               Submit
             </Button>
-            {result && (
+            {result.length > 0 && (
               <div className="mt-4 flex gap-2 items-center ">
                 Test Results:
                 <div className=" inline-flex text-green-500 gap-1 items-center">
                   <TiTick />
-                  {result.split(", ").filter((r) => r === "Passed").length}/{" "}
-                  {result.split(", ").length} test cases passed.
+                  {result.filter((r) => r.status === "Passed").length}/{" "}
+                  {result.length} test cases passed.
                 </div>
               </div>
             )}
-            {result && result.length > 0 && (
+            {result.length > 0 && (
               <div className="mt-4">
                 <h3 className="text-lg font-semibold mb-2 text-red-500 flex items-center gap-2 ">
                   <RxCross2 />
                   Failed Test Cases:{" "}
-                  {result.split(", ").filter((r) => r != "Passed").length}
+                  {result.filter((r) => r.status !== "Passed").length}
                 </h3>
                 <div className="max-h-20 overflow-y-auto p-2 border rounded-lg border-gray-300 shadow-lg">
-                  {result.split(", ").map(
+                  {result.map(
                     (testResult, index) =>
-                      testResult !== "Passed" && (
+                      testResult.status !== "Passed" && (
                         <div
                           key={index}
                           className="p-4 mb-2 bg-gray-100 rounded-lg border border-red-300"
                         >
-                          Test Case {index + 1}: {testResult}
+                          <div>Test Case {index + 1}:</div>
+                          <div>Input: {testResult.input}</div>
+                          <div>Expected Output: {testResult.expectedOutput}</div>
+                          <div>Your Output: {testResult.actualOutput}</div>
                         </div>
                       )
                   )}
@@ -223,7 +252,6 @@ export default function ProblemEvaluationPage({
           </div>
 
           <div className="flex-1 gap-10 basis-3/4 relative">
-            
             {isHintEnabled && (
               isLgScreen ? (
                 <Draggable>
